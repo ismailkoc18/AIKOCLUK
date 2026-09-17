@@ -361,3 +361,16 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# --- KİŞİSEL / HASSAS DOSYALAR (API KEYS & CONFIG) ---
+appsettings.json
+appsettings.Development.json
+appsettings.Production.json
+appsettings.*.json
+
+*.env
+.env
+
+.cursor/
+.vscode/
+/AIKOCLUK/appsettings.json

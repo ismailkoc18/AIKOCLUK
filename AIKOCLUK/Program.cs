@@ -11,8 +11,19 @@ builder.Services.AddOpenApi();
 
 // Veritabaný Servis Kaydý (DbContext)
 builder.Services.AddDbContext<AppDbContext>();
-builder.Services.AddScoped<AIKOCLUK.Services.AiCoachService>();
 
+// --- API Key Kontrolü ---
+var apiKey = builder.Configuration["GeminiSettings:ApiKey"];
+
+if (string.IsNullOrEmpty(apiKey))
+{
+    throw new InvalidOperationException(
+        "Gemini API Key bulunamadý! Lütfen 'User Secrets' (secrets.json) konfigürasyonunu kontrol edin."
+    );
+}
+
+// AI Koç Servisi Kaydý
+builder.Services.AddScoped<AIKOCLUK.Services.AiCoachService>();
 
 var app = builder.Build();
 
