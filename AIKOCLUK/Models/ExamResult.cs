@@ -28,5 +28,8 @@ namespace AIKOCLUK.Models
 
         // Yapay zeka analizi için kritik bir parametre
         public bool TimeManagementIssue { get; set; }
+
+        // Bir denemenin birden fazla konu hatası olabileceğini belirten koleksiyon
+        public List<ExamTopicError> TopicErrors { get; set; } = new();
     }
 }

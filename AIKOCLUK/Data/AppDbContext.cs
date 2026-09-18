@@ -10,6 +10,7 @@ namespace AIKOCLUK.Data
         public DbSet<Student> Students { get; set; }
         public DbSet<ExamResult> ExamResults { get; set; }
         public DbSet<AiFeedback> AiFeedbacks { get; set; }
+        public DbSet<ExamTopicError> ExamTopicErrors { get; set; }
 
         protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
         {
@@ -35,6 +36,13 @@ namespace AIKOCLUK.Data
                 .HasOne(a => a.Student)
                 .WithMany(s => s.AiFeedbacks)
                 .HasForeignKey(a => a.StudentId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // ExamResult - ExamTopicError (1 - N İlişkisi)
+            modelBuilder.Entity<ExamTopicError>()
+                .HasOne(e => e.ExamResult)
+                .WithMany(er => er.TopicErrors)
+                .HasForeignKey(e => e.ExamResultId)
                 .OnDelete(DeleteBehavior.Cascade);
         }
     }
