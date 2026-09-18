@@ -1,13 +1,13 @@
-﻿using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using AIKOCLUK.Data;
+﻿using AIKOCLUK.Data;
 using AIKOCLUK.Models;
 using AIKOCLUK.Services;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace AIKOCLUK.Controllers
 {
-    [Route("api/[controller]")]
     [ApiController]
+    [Route("api/[controller]")]
     public class CoachController : ControllerBase
     {
         private readonly AppDbContext _context;
@@ -19,11 +19,10 @@ namespace AIKOCLUK.Controllers
             _aiCoachService = aiCoachService;
         }
 
-        // POST: api/coach/generate-plan/{studentId}
-        [HttpPost("generate-plan/{studentId}")]
-        public async Task<IActionResult> GeneratePlan(int studentId)
+        [HttpPost("analyze/{studentId}")]
+        public async Task<IActionResult> GenerateAdvice(int studentId, [FromBody] AdviceRequestDto request)
         {
-            // 1. Öğrenciyi ve son eklenen deneme sonucunu veritabanından buluyoruz
+            // 1. Öğrenciyi ve son deneme sonucunu veritabanından çekiyoruz
             var student = await _context.Students
                 .Include(s => s.ExamResults)
                 .FirstOrDefaultAsync(s => s.Id == studentId);
@@ -33,29 +32,40 @@ namespace AIKOCLUK.Controllers
                 return NotFound(new { message = "Öğrenci bulunamadı." });
             }
 
-            var lastExam = student.ExamResults.OrderByDescending(e => e.Date).FirstOrDefault();
-
-            if (lastExam == null)
-            {
-                return BadRequest(new { message = "Öğrenciye ait kayıtlı bir deneme sonucu bulunamadı. Önce deneme eklemelisiniz." });
-            }
+            var lastExam = student.ExamResults
+                .OrderByDescending(e => e.ExamDate)
+                .FirstOrDefault();
 
             try
             {
-                // 2. Gemini Yapay Zeka Servisini tetikliyoruz
-                string studyPlan = await _aiCoachService.GenerateStudyPlanAsync(student, lastExam);
+                // 2. Gemini Yapay Zeka Servisini çağırıyoruz
+                string advice = await _aiCoachService.GeneratePersonalizedAdviceAsync(student, lastExam, request?.StudentNote);
 
-                // 3. Sonucu dış dünyaya dönüyoruz
+                // 3. Üretilen tavsiyeyi veritabanına (AiFeedback) kaydediyoruz
+                var aiFeedback = new AiFeedback
+                {
+                    StudentId = student.Id,
+                    GeneratedAdvice = advice,
+                    StudentNote = request?.StudentNote ?? string.Empty,
+                    DetectedSentiment = student.CurrentStressLevel >= 7 ? "Stresli/Kaygılı" : "Dengeli",
+                    Date = DateTime.UtcNow
+                };
+
+                _context.AiFeedbacks.Add(aiFeedback);
+                await _context.SaveChangesAsync();
+
+                // 4. İstemciye yanıtı dönüyoruz
                 return Ok(new
                 {
                     StudentName = student.Name,
-                    Target = student.TargetDepartment,
-                    AiStudyPlan = studyPlan
+                    Target = $"{student.TargetUniversity} - {student.TargetDepartment}",
+                    Advice = advice,
+                    CreatedAt = aiFeedback.Date
                 });
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { message = "Yapay zeka planı oluşturulurken bir hata oluştu.", error = ex.Message });
+                return StatusCode(500, new { message = "AI Tavsiyesi üretilirken bir hata oluştu.", error = ex.Message });
             }
         }
     }

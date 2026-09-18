@@ -1,21 +1,32 @@
-﻿namespace AIKOCLUK.Models
+﻿using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+
+namespace AIKOCLUK.Models
 {
     public class ExamResult
     {
+        [Key]
         public int Id { get; set; }
+
+        [ForeignKey("Student")]
         public int StudentId { get; set; }
-        public Student? Student { get; set; }
+        public Student Student { get; set; } = null!;
 
-        public string ExamName { get; set; } = string.Empty; // Örn: TYT Genel Deneme 1
-        public DateTime Date { get; set; } = DateTime.Now;
+        [Required]
+        public string ExamType { get; set; } = string.Empty; // "TYT" veya "AYT"
+        public DateTime ExamDate { get; set; } = DateTime.UtcNow;
 
-        // Net Bilgileri
+        // TYT Bazlı Örnek Ders Netleri
         public double TurkishNet { get; set; }
         public double MathNet { get; set; }
         public double ScienceNet { get; set; }
         public double SocialNet { get; set; }
 
-        // Yapay zekanın analiz edeceği zayıf/hatalı olunan alt konular (Virgülle ayrılmış veya metin)
-        public string WeakTopics { get; set; } = string.Empty;
+        // Toplam neti veritabanında tutmak yerine dinamik hesaplatıyoruz
+        [NotMapped]
+        public double TotalNet => TurkishNet + MathNet + ScienceNet + SocialNet;
+
+        // Yapay zeka analizi için kritik bir parametre
+        public bool TimeManagementIssue { get; set; }
     }
 }

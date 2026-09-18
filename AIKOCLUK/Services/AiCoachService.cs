@@ -1,46 +1,89 @@
-﻿using Google.GenAI;
-using AIKOCLUK.Models;
-using Microsoft.Extensions.Configuration;
+﻿using AIKOCLUK.Models;
+using System.Text.Json;
 
 namespace AIKOCLUK.Services
 {
     public class AiCoachService
     {
+        private readonly HttpClient _httpClient;
         private readonly string _apiKey;
 
-        public AiCoachService(IConfiguration configuration)
+        public AiCoachService(HttpClient httpClient, IConfiguration configuration)
         {
-            _apiKey = configuration["GeminiSettings:ApiKey"] ?? string.Empty;
+            _httpClient = httpClient;
+            _apiKey = configuration["Gemini:ApiKey"]
+                ?? throw new InvalidOperationException("Gemini API anahtarı appsettings veya User Secrets içinde bulunamadı.");
         }
 
-        public async Task<string> GenerateStudyPlanAsync(Student student, ExamResult lastExam)
+        public async Task<string> GeneratePersonalizedAdviceAsync(Student student, ExamResult? lastExam, string? studentMessage)
         {
-            // Gemini istemcisini API anahtarı ile başlatıyoruz
-            var client = new Client(apiKey: _apiKey);
+            // Model adı güncel gemini-2.5-flash sürümüne güncellendi
+            var endpoint = $"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={_apiKey}";
 
+            // Öğrencinin durumuna ve veritabanı kayıtlarına göre dinamik sistem konsepti inşa ediyoruz
             string prompt = $"""
-                Sen profesyonel bir YKS (Yükseköğretim Kurumları Sınavı) koçusun.
-                Öğrenci Bilgileri:
-                - Hedef Bölüm: {student.TargetDepartment}
-                - Günlük Çalışma Saati: {student.DailyStudyHours} saat
+                Sen YKS (Yükseköğretim Kurumları Sınavı) hazırlık sürecinde uzman, empati yeteneği yüksek ve veriye dayalı yönlendirme yapan profesyonel bir Eğitim Koçusun.
+                
+                ÖĞRENCİ PROFİLİ:
+                - İsim: {student.Name}
+                - Hedef: {student.TargetUniversity} - {student.TargetDepartment} ({student.Field})
+                - Öğrenme Stili: {student.LearningStyle}
+                - Günlük Çalışma Kapasitesi: {student.DailyAvailableStudyHours} Saat
+                - Mevcut Stres Seviyesi (1-10): {student.CurrentStressLevel}/10
+                - En Çok Zorlandığı Konular/Dersler: {student.WeakSubjects}
 
-                Son Deneme Sonuçları:
-                - Türkçe Neti: {lastExam.TurkishNet}
-                - Matematik Neti: {lastExam.MathNet}
-                - Fen Neti: {lastExam.ScienceNet}
+                {(lastExam != null ? $"""
+                SON DENEME PERFORMANSI ({lastExam.ExamType} - {lastExam.ExamDate:dd.MM.yyyy}):
+                - Türkçe Net: {lastExam.TurkishNet}
+                - Matematik Net: {lastExam.MathNet}
+                - Fen Net: {lastExam.ScienceNet}
                 - Sosyal Net: {lastExam.SocialNet}
-                - Zayıf / Hatalı Olunan Konular: {lastExam.WeakTopics}
+                - Toplam Net: {lastExam.TotalNet}
+                - Zaman Yönetimi Sorunu Yaşadı Mı?: {(lastExam.TimeManagementIssue ? "Evet" : "Hayır")}
+                """ : "Henüz sistemde bir deneme sonucu kayıtlı değil.")}
 
-                Bu verilere dayanarak öğrenciye özel, motive edici, haftalık pratik bir çalışma planı ve eksiklerini kapatması için stratejik tavsiyeler hazırla.
+                ÖĞRENCİNİN ANLIK NOTU / SORUSU:
+                "{(string.IsNullOrWhiteSpace(studentMessage) ? "Bugün nasıl bir çalışma stratejisi izlemeliyim?" : studentMessage)}"
+
+                YÖNERGELER:
+                1. Öğrencinin stres seviyesi 7 veya üzerindeyse önce motivasyonel ve rahatlatıcı bir ton kullan, ardından somut aksiyon adımlarına geç.
+                2. Yanıtında zayıf olduğu derslere ({student.WeakSubjects}) ve son denemedeki eksiklerine özel, kısa ama etkili taktikler ver.
+                3. Günlük {student.DailyAvailableStudyHours} saatlik kapasitesini aşmayacak gerçekçi bir çalışma planı tavsiyesi sun.
+                4. Cevabı doğrudan öğrenciye hitap ederek (İkinci tekil şahıs: "Sen") ve anlaşılır maddeler halinde ver.
                 """;
 
-            // En güncel ve hızlı Gemini modelini kullanıyoruz
-            var response = await client.Models.GenerateContentAsync(
-                model: "gemini-2.5-flash",
-                contents: prompt
-            );
+            var requestBody = new
+            {
+                contents = new[]
+                {
+                    new
+                    {
+                        parts = new[]
+                        {
+                            new { text = prompt }
+                        }
+                    }
+                }
+            };
 
-            return response.Text ?? "Yapay zeka koçluk planı oluşturamadı.";
+            var response = await _httpClient.PostAsJsonAsync(endpoint, requestBody);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                throw new HttpRequestException($"Gemini API Hatası ({response.StatusCode}): {errorContent}");
+            }
+
+            var jsonResponse = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+            var advice = jsonResponse
+                .GetProperty("candidates")[0]
+                .GetProperty("content")
+                .GetProperty("parts")[0]
+                .GetProperty("text")
+                .GetString();
+
+            return advice ?? "Şu anda koçluk tavsiyesi üretilemedi. Lütfen tekrar deneyin.";
         }
     }
 }

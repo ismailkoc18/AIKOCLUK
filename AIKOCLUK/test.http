@@ -1,0 +1,6 @@
+POST https://localhost:7036/api/Coach/analyze/1
+Content-Type: application/json
+
+{
+  "studentNote": "Geometri netlerimi bir türlü artıramıyorum, sınav yaklaştıkça çok panik oluyorum."
+}
