@@ -1,5 +1,7 @@
-﻿using AIKOCLUK.Models;
-using AIKOCLUK.Core.Constants;
+﻿using AIKOCLUK.Core.Constants;
+using AIKOCLUK.Data;
+using AIKOCLUK.Models;
+using Microsoft.EntityFrameworkCore;
 using System.Net.Http.Json;
 using System.Text.Json;
 
@@ -9,15 +11,21 @@ namespace AIKOCLUK.Services
     {
         private readonly HttpClient _httpClient;
         private readonly ILogger<AiCoachService> _logger;
+        private readonly AppDbContext _context;
         private readonly string? _apiKey;
 
         private const string GeminiEndpoint =
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
 
-        public AiCoachService(HttpClient httpClient, IConfiguration configuration, ILogger<AiCoachService> logger)
+        public AiCoachService(
+            HttpClient httpClient,
+            IConfiguration configuration,
+            ILogger<AiCoachService> logger,
+            AppDbContext context)
         {
             _httpClient = httpClient;
             _logger = logger;
+            _context = context;
             // DİKKAT: Constructor içinde hata fırlatmıyoruz, aksi takdirde migration sırasında uygulama çöker.
             _apiKey = configuration["Gemini:ApiKey"];
         }
@@ -75,12 +83,9 @@ namespace AIKOCLUK.Services
                 ÖĞRENCİ MESAJI: "{(string.IsNullOrWhiteSpace(studentMessage) ? "Bugün nasıl bir çalışma stratejisi izlemeliyim?" : studentMessage)}"
                 """;
 
-            string fullPrompt = $@"{AiPrompts.YksUzmani}
-{AiPrompts.AnalitikZeka}
-{AiPrompts.JsonZorlayici}
+            string fullPrompt = $@"{AiPrompts.YksUzmani}{AiPrompts.AnalitikZeka}{AiPrompts.JsonZorlayici}
 
-AŞAĞIDAKİ ÖĞRENCİ VERİLERİNİ ANALİZ ET:
-{studentContext}";
+AŞAĞIDAKİ ÖĞRENCİ VERİLERİNİ ANALİZ ET:{studentContext}";
 
             var requestBody = new
             {
@@ -128,6 +133,83 @@ AŞAĞIDAKİ ÖĞRENCİ VERİLERİNİ ANALİZ ET:
             });
 
             return analysisResult ?? throw new InvalidOperationException("JSON dönüştürme başarısız oldu.");
+        }
+
+        /// <summary>
+        /// AiCoachController tarafından çağrılan genel analiz metodu.
+        /// </summary>
+        public async Task<string> GenerateStudentAnalysisAsync(int studentId)
+        {
+            var student = await _context.Students
+                .FirstOrDefaultAsync(s => s.Id == studentId);
+
+            if (student == null)
+                throw new KeyNotFoundException($"{studentId} ID'li öğrenci bulunamadı.");
+
+            var recentExams = await _context.ExamResults
+                .Include(e => e.TopicErrors)
+                .Where(e => e.StudentId == studentId)
+                .OrderByDescending(e => e.ExamDate)
+                .Take(5)
+                .ToListAsync();
+
+            var result = await GeneratePersonalizedAdviceAsync(student, recentExams, "Son durumumu ve genel denemelerimi analiz et.");
+
+            string contentText = result.GenelDegerlendirme ?? "Analiz tamamlandı.";
+
+            var history = new AiAdviceHistory
+            {
+                StudentId = studentId,
+                AdviceType = "Gelişmiş Deneme ve Profil Analizi",
+                Content = contentText,
+                GenelDegerlendirme = contentText,
+                HaftalikOdakTavsiyesi = result.HaftalikOdakTavsiyesi ?? "",
+                KirmiziAlarmDersleri = result.KirmiziAlarmDersleri != null ? string.Join(", ", result.KirmiziAlarmDersleri) : "",
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _context.AiAdviceHistories.Add(history);
+            await _context.SaveChangesAsync();
+
+            return contentText;
+        }
+
+        /// <summary>
+        /// AiCoachController tarafından çağrılan anlık soru-cevap metodu.
+        /// </summary>
+        public async Task<string> AskQuestionAsync(int studentId, string question)
+        {
+            var student = await _context.Students
+                .FirstOrDefaultAsync(s => s.Id == studentId);
+
+            if (student == null)
+                throw new KeyNotFoundException($"{studentId} ID'li öğrenci bulunamadı.");
+
+            var recentExams = await _context.ExamResults
+                .Include(e => e.TopicErrors)
+                .Where(e => e.StudentId == studentId)
+                .OrderByDescending(e => e.ExamDate)
+                .Take(5)
+                .ToListAsync();
+
+            var result = await GeneratePersonalizedAdviceAsync(student, recentExams, question);
+
+            string responseText = result.GenelDegerlendirme ?? "Sorunuz yanıtlandı.";
+
+            var history = new AiAdviceHistory
+            {
+                StudentId = studentId,
+                AdviceType = $"Soru: {question}",
+                Content = responseText,
+                GenelDegerlendirme = responseText,
+                HaftalikOdakTavsiyesi = result.HaftalikOdakTavsiyesi ?? "",
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _context.AiAdviceHistories.Add(history);
+            await _context.SaveChangesAsync();
+
+            return responseText;
         }
     }
 }

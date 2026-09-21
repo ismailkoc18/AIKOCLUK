@@ -1,5 +1,6 @@
 using AIKOCLUK.Data;
 using AIKOCLUK.Middlewares;
+using AIKOCLUK.Services;
 using FluentValidation;
 using FluentValidation.AspNetCore;
 using Microsoft.AspNetCore.RateLimiting;
@@ -50,8 +51,6 @@ try
     }
 
     // --- Endpoint Koruma API Key Kontrolü ---
-    // Þu an projede kullanýcý giriþi (Identity/JWT) yok. Bu basit paylaþýlan-anahtar
-    // kontrolü, /api/* uçlarýnýn yetkisiz eriþime tamamen açýk kalmasýný engeller.
     var endpointApiKey = builder.Configuration["ApiSettings:ApiKey"];
     if (string.IsNullOrEmpty(endpointApiKey))
     {
@@ -62,6 +61,16 @@ try
 
     // AI Koç Servisi ve HttpClient Kaydý
     builder.Services.AddHttpClient<AIKOCLUK.Services.AiCoachService>();
+
+    // Grafik ve Deneme Analiz Servisi Kaydý
+    builder.Services.AddScoped<ExamAnalyticsService>();
+
+    // Konu Bazlý Analiz ve Müfredat Aðacý Servis Kaydý (YENÝ EKLENDÝ)
+    builder.Services.AddScoped<TopicAnalyticsService>();
+    builder.Services.AddScoped<GamificationService>();
+
+    builder.Services.AddHttpClient<StudyPlanService>();
+    builder.Services.AddHttpClient<AiChatService>();
 
     // --- AI Endpoint'i için Rate Limiting ---
     builder.Services.AddRateLimiter(options =>
@@ -74,7 +83,6 @@ try
             opt.QueueLimit = 0;
         });
     });
-
 
     WebApplication app;
     try

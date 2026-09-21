@@ -11,15 +11,21 @@ namespace AIKOCLUK.Models
         public int Id { get; set; }
 
         public int StudentId { get; set; } // Hangi öğrenciye ait olduğu
+        public Student Student { get; set; } = null!; // Veritabanı ilişkisi (Navigation Property)
 
-        public DateTime CreatedAt { get; set; } = DateTime.Now; // Tavsiyenin üretildiği tarih
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow; // Tavsiyenin üretildiği tarih
 
-        public string GenelDegerlendirme { get; set; }
+        // --- Controller ve Service Yapısı İçin Eklenen Alanlar ---
+        public string AdviceType { get; set; } = string.Empty;
+        public string Content { get; set; } = string.Empty;
 
-        public string HaftalikOdakTavsiyesi { get; set; }
+        // --- Mevcut Eski Alanların (Aynen Korundu) ---
+        public string GenelDegerlendirme { get; set; } = string.Empty;
+
+        public string HaftalikOdakTavsiyesi { get; set; } = string.Empty;
 
         // SQLite'ta liste tutamadığımız için virgülle ayırıp kaydedeceğiz (Örn: "Matematik, Fizik")
-        public string KirmiziAlarmDersleri { get; set; }
+        public string KirmiziAlarmDersleri { get; set; } = string.Empty;
 
         // Bire-Çok İlişki (One-to-Many): Bir tavsiyenin altındaki hedef konular
         public List<AiTargetSubject> HedefKonular { get; set; } = new List<AiTargetSubject>();
@@ -33,9 +39,9 @@ namespace AIKOCLUK.Models
 
         public int AiAdviceHistoryId { get; set; } // Üst tablonun ID'si (Foreign Key)
 
-        public string Ders { get; set; }
-        public string Konu { get; set; }
-        public string Neden { get; set; }
-        public string Taktik { get; set; }
+        public string Ders { get; set; } = string.Empty;
+        public string Konu { get; set; } = string.Empty;
+        public string Neden { get; set; } = string.Empty;
+        public string Taktik { get; set; } = string.Empty;
     }
 }
