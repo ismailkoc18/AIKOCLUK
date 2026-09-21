@@ -2,8 +2,10 @@ using AIKOCLUK.Data;
 using AIKOCLUK.Middlewares;
 using FluentValidation;
 using FluentValidation.AspNetCore;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
+using System.Threading.RateLimiting;
 
 // --- 1. Serilog Konfigürasyonu ---
 // Uygulama loglarýný hem konsola hem de günlük metin dosyalarýna (logs/ klasörüne) yazar
@@ -38,7 +40,7 @@ try
     // Repository Servis Kaydý
     builder.Services.AddScoped<AIKOCLUK.Repositories.ICoachRepository, AIKOCLUK.Repositories.CoachRepository>();
 
-    // --- API Key Kontrolü ---
+    // --- Gemini API Key Kontrolü ---
     var apiKey = builder.Configuration["Gemini:ApiKey"];
     if (string.IsNullOrEmpty(apiKey))
     {
@@ -47,10 +49,47 @@ try
         );
     }
 
+    // --- Endpoint Koruma API Key Kontrolü ---
+    // Þu an projede kullanýcý giriþi (Identity/JWT) yok. Bu basit paylaþýlan-anahtar
+    // kontrolü, /api/* uçlarýnýn yetkisiz eriþime tamamen açýk kalmasýný engeller.
+    var endpointApiKey = builder.Configuration["ApiSettings:ApiKey"];
+    if (string.IsNullOrEmpty(endpointApiKey))
+    {
+        throw new InvalidOperationException(
+            "ApiSettings:ApiKey bulunamadý! Lütfen 'User Secrets' (secrets.json) konfigürasyonunda tanýmlayýn."
+        );
+    }
+
     // AI Koç Servisi ve HttpClient Kaydý
     builder.Services.AddHttpClient<AIKOCLUK.Services.AiCoachService>();
 
-    var app = builder.Build();
+    // --- AI Endpoint'i için Rate Limiting ---
+    builder.Services.AddRateLimiter(options =>
+    {
+        options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+        options.AddFixedWindowLimiter("ai-analyze", opt =>
+        {
+            opt.Window = TimeSpan.FromMinutes(1);
+            opt.PermitLimit = 5;
+            opt.QueueLimit = 0;
+        });
+    });
+
+
+    WebApplication app;
+    try
+    {
+        app = builder.Build();
+    }
+    catch (Exception ex)
+    {
+        Log.Fatal(ex, "Builder build edilirken kritik hata yakalandý!");
+        if (ex.InnerException != null)
+        {
+            Log.Fatal("Ýç hata detayý: {InnerMessage}", ex.InnerException.Message);
+        }
+        throw;
+    }
 
     // --- 3. HTTP Pipeline Yapýlandýrmasý ---
 
@@ -68,6 +107,11 @@ try
     }
 
     app.UseHttpsRedirection();
+    app.UseRateLimiter();
+
+    // API anahtarý kontrolü (Authorization'dan önce çalýþmalý)
+    app.UseMiddleware<ApiKeyAuthMiddleware>();
+
     app.UseAuthorization();
     app.MapControllers();
 

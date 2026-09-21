@@ -1,29 +1,38 @@
 ﻿using AIKOCLUK.Models;
+using AIKOCLUK.Core.Constants;
 using System.Net.Http.Json;
 using System.Text.Json;
 
 namespace AIKOCLUK.Services
 {
-    public class AiCoachService
+    public class AiCoachService : IAiCoachService
     {
         private readonly HttpClient _httpClient;
-        private readonly string _apiKey;
+        private readonly ILogger<AiCoachService> _logger;
+        private readonly string? _apiKey;
 
-        public AiCoachService(HttpClient httpClient, IConfiguration configuration)
+        private const string GeminiEndpoint =
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
+
+        public AiCoachService(HttpClient httpClient, IConfiguration configuration, ILogger<AiCoachService> logger)
         {
             _httpClient = httpClient;
-            _apiKey = configuration["Gemini:ApiKey"]
-                ?? throw new InvalidOperationException("Gemini API anahtarı appsettings veya User Secrets içinde bulunamadı.");
+            _logger = logger;
+            // DİKKAT: Constructor içinde hata fırlatmıyoruz, aksi takdirde migration sırasında uygulama çöker.
+            _apiKey = configuration["Gemini:ApiKey"];
         }
 
-        public async Task<string> GeneratePersonalizedAdviceAsync(
+        public async Task<AiExamAnalysisResult> GeneratePersonalizedAdviceAsync(
             Student student,
             List<ExamResult> recentExams,
             string? studentMessage)
         {
-            var endpoint = $"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={_apiKey}";
+            // API anahtarı yoksa hatayı burada, gerçek istek atılacağı sırada fırlatıyoruz
+            if (string.IsNullOrEmpty(_apiKey))
+            {
+                throw new InvalidOperationException("Gemini API anahtarı appsettings veya User Secrets içinde bulunamadı.");
+            }
 
-            // Son denemelerdeki en çok tekrarlanan ilk 5 kronik konu eksiğini buluyoruz
             var topWeakTopics = recentExams
                 .SelectMany(e => e.TopicErrors)
                 .GroupBy(t => new { t.Subject, t.TopicName })
@@ -41,7 +50,6 @@ namespace AIKOCLUK.Services
                 ? string.Join("\n", topWeakTopics.Select(t => $"- {t.Subject} / {t.Topic}: Toplam {t.TotalErrors} Yanlış/Boş"))
                 : "Belirgin bir konu eksiği kaydı bulunmuyor.";
 
-            // Son denemelerin net ortalamaları
             double avgMath = recentExams.Any() ? Math.Round(recentExams.Average(e => e.MathNet), 2) : 0;
             double avgTurk = recentExams.Any() ? Math.Round(recentExams.Average(e => e.TurkishNet), 2) : 0;
             double avgSci = recentExams.Any() ? Math.Round(recentExams.Average(e => e.ScienceNet), 2) : 0;
@@ -49,67 +57,77 @@ namespace AIKOCLUK.Services
 
             var lastExam = recentExams.LastOrDefault();
 
-            string prompt = $"""
-                Sen YKS (Yükseköğretim Kurumları Sınavı) hazırlık sürecinde uzman, empati yeteneği yüksek ve veriye dayalı yönlendirme yapan profesyonel bir Eğitim Koçusun.
-                
+            string studentContext = $"""
                 ÖĞRENCİ PROFİLİ:
                 - İsim: {student.Name}
                 - Hedef: {student.TargetUniversity} - {student.TargetDepartment} ({student.Field})
                 - Öğrenme Stili: {student.LearningStyle}
                 - Günlük Çalışma Kapasitesi: {student.DailyAvailableStudyHours} Saat
                 - Mevcut Stres Seviyesi (1-10): {student.CurrentStressLevel}/10
-                - En Çok Zorlandığı Konular/Dersler: {student.WeakSubjects}
 
                 SON {recentExams.Count} DENEME PERFORMANS ÖZETİ:
-                - Analiz Edilen Deneme Sayısı: {recentExams.Count}
                 - Ortalama Netler: Türkçe: {avgTurk} | Matematik: {avgMath} | Fen: {avgSci} | Sosyal: {avgSoc}
-                {(lastExam != null ? $"- En Son Deneme Toplam Net ({lastExam.ExamType} - {lastExam.ExamDate:dd.MM.yyyy}): {lastExam.TotalNet} (Süre Sorunu Yaşandı Mı: {(lastExam.TimeManagementIssue ? "Evet" : "Hayır")})" : "Henüz sistemde bir deneme sonucu kayıtlı değil.")}
+                {(lastExam != null ? $"- En Son Deneme Toplam Net: {lastExam.TotalNet}" : "")}
 
-                SON DENEMELERDE KRONİKLEŞEN EN KRİTİK KONU EKSİKLERİ:
+                KRONİKLEŞEN EKSİKLER:
                 {topicSummary}
 
-                ÖĞRENCİNİN ANLIK NOTU / SORUSU:
-                "{(string.IsNullOrWhiteSpace(studentMessage) ? "Bugün nasıl bir çalışma stratejisi izlemeliyim?" : studentMessage)}"
-
-                YÖNERGELER:
-                1. Öğrencinin stres seviyesi 7 veya üzerindeyse önce motivasyonel ve rahatlatıcı bir ton kullan, ardından somut aksiyon adımlarına geç.
-                2. Son denemelerde kronikleşen konu eksiklerini ({topicSummary}) önceliklendirerek nokta atışı aksiyon planı çıkar.
-                3. Günlük {student.DailyAvailableStudyHours} saatlik kapasitesini aşmayacak gerçekçi bir çalışma planı tavsiyesi sun.
-                4. Cevabı doğrudan öğrenciye hitap ederek (İkinci tekil şahıs: "Sen") ve anlaşılır maddeler halinde ver.
+                ÖĞRENCİ MESAJI: "{(string.IsNullOrWhiteSpace(studentMessage) ? "Bugün nasıl bir çalışma stratejisi izlemeliyim?" : studentMessage)}"
                 """;
+
+            string fullPrompt = $@"{AiPrompts.YksUzmani}
+{AiPrompts.AnalitikZeka}
+{AiPrompts.JsonZorlayici}
+
+AŞAĞIDAKİ ÖĞRENCİ VERİLERİNİ ANALİZ ET:
+{studentContext}";
 
             var requestBody = new
             {
                 contents = new[]
                 {
-                    new
-                    {
-                        parts = new[]
-                        {
-                            new { text = prompt }
-                        }
-                    }
+                    new { parts = new[] { new { text = fullPrompt } } }
+                },
+                generationConfig = new
+                {
+                    responseMimeType = "application/json",
+                    temperature = 0.7
                 }
             };
 
-            var response = await _httpClient.PostAsJsonAsync(endpoint, requestBody);
+            using var request = new HttpRequestMessage(HttpMethod.Post, GeminiEndpoint)
+            {
+                Content = JsonContent.Create(requestBody)
+            };
+            request.Headers.Add("x-goog-api-key", _apiKey);
+
+            var response = await _httpClient.SendAsync(request);
 
             if (!response.IsSuccessStatusCode)
             {
                 var errorContent = await response.Content.ReadAsStringAsync();
-                throw new HttpRequestException($"Gemini API Hatası ({response.StatusCode}): {errorContent}");
+                _logger.LogError("Gemini API Hatası ({StatusCode}): {ErrorContent}", response.StatusCode, errorContent);
+                throw new HttpRequestException("Gemini API isteği başarısız oldu.");
             }
 
             var jsonResponse = await response.Content.ReadFromJsonAsync<JsonElement>();
 
-            var advice = jsonResponse
+            var aiJsonString = jsonResponse
                 .GetProperty("candidates")[0]
                 .GetProperty("content")
                 .GetProperty("parts")[0]
                 .GetProperty("text")
                 .GetString();
 
-            return advice ?? "Şu anda koçluk tavsiyesi üretilemedi. Lütfen tekrar deneyin.";
+            if (string.IsNullOrWhiteSpace(aiJsonString))
+                throw new InvalidOperationException("Gemini'den boş yanıt döndü.");
+
+            var analysisResult = JsonSerializer.Deserialize<AiExamAnalysisResult>(aiJsonString, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+
+            return analysisResult ?? throw new InvalidOperationException("JSON dönüştürme başarısız oldu.");
         }
     }
 }

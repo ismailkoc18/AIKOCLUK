@@ -64,16 +64,29 @@ namespace AIKOCLUK.Repositories
 
         public async Task AddExamResultWithTopicsAsync(ExamResult examResult, List<ExamTopicError> topicErrors)
         {
-            await _context.ExamResults.AddAsync(examResult);
-            await _context.SaveChangesAsync();
-
-            foreach (var error in topicErrors)
+            // İki ayrı SaveChanges arada başarısız olursa konu hatası içermeyen bir
+            // "yetim" deneme sonucu kalmasın diye tek transaction'da yapıyoruz.
+            await using var transaction = await _context.Database.BeginTransactionAsync();
+            try
             {
-                error.ExamResultId = examResult.Id;
-            }
+                await _context.ExamResults.AddAsync(examResult);
+                await _context.SaveChangesAsync();
 
-            await _context.ExamTopicErrors.AddRangeAsync(topicErrors);
-            await _context.SaveChangesAsync();
+                foreach (var error in topicErrors)
+                {
+                    error.ExamResultId = examResult.Id;
+                }
+
+                await _context.ExamTopicErrors.AddRangeAsync(topicErrors);
+                await _context.SaveChangesAsync();
+
+                await transaction.CommitAsync();
+            }
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw;
+            }
         }
     }
 }

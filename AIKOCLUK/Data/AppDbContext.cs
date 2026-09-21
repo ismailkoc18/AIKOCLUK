@@ -12,6 +12,10 @@ namespace AIKOCLUK.Data
         public DbSet<AiFeedback> AiFeedbacks { get; set; }
         public DbSet<ExamTopicError> ExamTopicErrors { get; set; }
 
+        // --- YENİ EKLENEN YAPAY ZEKA TABLOLARI ---
+        public DbSet<AiAdviceHistory> AiAdviceHistories { get; set; }
+        public DbSet<AiTargetSubject> AiTargetSubjects { get; set; }
+
         protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
         {
             if (!optionsBuilder.IsConfigured)
@@ -43,6 +47,13 @@ namespace AIKOCLUK.Data
                 .HasOne(e => e.ExamResult)
                 .WithMany(er => er.TopicErrors)
                 .HasForeignKey(e => e.ExamResultId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // --- YENİ EKLENEN İLİŞKİ (AiAdviceHistory - AiTargetSubject) ---
+            modelBuilder.Entity<AiTargetSubject>()
+                .HasOne<AiAdviceHistory>()
+                .WithMany(a => a.HedefKonular)
+                .HasForeignKey(t => t.AiAdviceHistoryId)
                 .OnDelete(DeleteBehavior.Cascade);
         }
     }

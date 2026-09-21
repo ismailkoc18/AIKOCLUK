@@ -1,7 +1,10 @@
-﻿using AIKOCLUK.Models;
+﻿using AIKOCLUK.Data; // AppDbContext için
+using AIKOCLUK.Models;
 using AIKOCLUK.Repositories;
 using AIKOCLUK.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
 
 namespace AIKOCLUK.Controllers
 {
@@ -10,16 +13,19 @@ namespace AIKOCLUK.Controllers
     public class CoachController : ControllerBase
     {
         private readonly ICoachRepository _repository;
-        private readonly AiCoachService _aiCoachService;
+        private readonly IAiCoachService _aiCoachService; // Interface üzerinden çağırmak en iyisidir
+        private readonly AppDbContext _context; // Veritabanı kayıtları için
 
-        public CoachController(ICoachRepository repository, AiCoachService aiCoachService)
+        public CoachController(ICoachRepository repository, IAiCoachService aiCoachService, AppDbContext context)
         {
             _repository = repository;
             _aiCoachService = aiCoachService;
+            _context = context;
         }
 
-        // 1. Son 5 Deneme & Kronikleşen Konu Hatalarına Dayalı AI Analizi
+        // 1. Son 5 Deneme & Kronikleşen Konu Hatalarına Dayalı AI Analizi ve Veritabanına Kayıt
         [HttpPost("analyze/{studentId}")]
+        [EnableRateLimiting("ai-analyze")]
         public async Task<IActionResult> GenerateAdvice(int studentId, [FromBody] AdviceRequestDto request)
         {
             var student = await _repository.GetStudentWithExamsAsync(studentId);
@@ -35,26 +41,48 @@ namespace AIKOCLUK.Controllers
                 return BadRequest(new { message = "Analiz yapılabilmesi için sistemde en az 1 deneme sonucu bulunmalıdır." });
             }
 
-            string advice = await _aiCoachService.GeneratePersonalizedAdviceAsync(student, recentExams, request?.StudentNote);
+            // Yapay zekadan yapılandırılmış JSON sonucunu (AiExamAnalysisResult) alıyoruz
+            AiExamAnalysisResult analysisResult = await _aiCoachService.GeneratePersonalizedAdviceAsync(
+                student,
+                recentExams,
+                request?.StudentNote);
 
-            var aiFeedback = new AiFeedback
+            // Yeni tablomuz için geçmiş koçluk nesnesini oluşturuyoruz
+            var adviceHistory = new AiAdviceHistory
             {
                 StudentId = student.Id,
-                GeneratedAdvice = advice,
-                StudentNote = request?.StudentNote ?? string.Empty,
-                DetectedSentiment = student.CurrentStressLevel >= 7 ? "Stresli/Kaygılı" : "Dengeli",
-                Date = DateTime.UtcNow
+                CreatedAt = DateTime.UtcNow,
+                GenelDegerlendirme = analysisResult.GenelDegerlendirme,
+                HaftalikOdakTavsiyesi = analysisResult.HaftalikOdakTavsiyesi,
+                // Listeyi SQLite'ta saklayabilmek için virgülle birleştiriyoruz
+                KirmiziAlarmDersleri = analysisResult.KirmiziAlarm != null ? string.Join(", ", analysisResult.KirmiziAlarm) : string.Empty
             };
 
-            await _repository.AddAiFeedbackAsync(aiFeedback);
-            await _repository.SaveChangesAsync();
+            // Yapay zekanın önerdiği hedef konuları alt tabloya ekliyoruz
+            if (analysisResult.HedefKonular != null)
+            {
+                foreach (var target in analysisResult.HedefKonular)
+                {
+                    adviceHistory.HedefKonular.Add(new AiTargetSubject
+                    {
+                        Ders = target.Ders,
+                        Konu = target.Konu,
+                        Neden = target.Neden,
+                        Taktik = target.Taktik
+                    });
+                }
+            }
+
+            // Veritabanına kaydediyoruz
+            _context.AiAdviceHistories.Add(adviceHistory);
+            await _context.SaveChangesAsync();
 
             return Ok(new
             {
                 StudentName = student.Name,
                 Target = $"{student.TargetUniversity} - {student.TargetDepartment}",
-                Advice = advice,
-                CreatedAt = aiFeedback.Date
+                Analysis = analysisResult,
+                CreatedAt = adviceHistory.CreatedAt
             });
         }
 
@@ -76,10 +104,9 @@ namespace AIKOCLUK.Controllers
                 return BadRequest(new { message = "Gelişim raporu oluşturulabilmesi için kayıtlı deneme bulunamadı." });
             }
 
-            var firstExam = recentExams.First(); // Analize giren en eski deneme
-            var lastExam = recentExams.Last();   // En güncel deneme
+            var firstExam = recentExams.First();
+            var lastExam = recentExams.Last();
 
-            // Ders bazlı ortalama net ve gelişim hesaplama fonksiyonu
             Func<string, Func<ExamResult, double>, SubjectProgressDto> buildSubjectProgress = (subjectName, selector) =>
             {
                 double firstNet = selector(firstExam);
@@ -107,7 +134,6 @@ namespace AIKOCLUK.Controllers
                 buildSubjectProgress("Sosyal Bilgiler", e => e.SocialNet)
             };
 
-            // Son 5 denemedeki en çok tekrarlanan ilk 5 konu hatası
             var criticalWeakTopics = recentExams
                 .SelectMany(e => e.TopicErrors)
                 .GroupBy(t => new { t.Subject, t.TopicName })
@@ -217,7 +243,7 @@ namespace AIKOCLUK.Controllers
             });
         }
 
-        // 5. Öğrenci Koçluk Geçmişi
+        // 5. Öğrenci Koçluk Geçmişi (Yeni veritabanı tablosundan çekiyoruz)
         [HttpGet("history/{studentId}")]
         public async Task<IActionResult> GetStudentHistory(int studentId)
         {
@@ -227,18 +253,14 @@ namespace AIKOCLUK.Controllers
                 return NotFound(new { message = $"ID'si {studentId} olan öğrenci bulunamadı." });
             }
 
-            var history = await _repository.GetStudentHistoryAsync(studentId);
+            // Yeni AiAdviceHistories tablosundan öğrenciye ait geçmişi ve alt hedef konuları çekiyoruz
+            var history = await _context.AiAdviceHistories
+                .Include(h => h.HedefKonular)
+                .Where(h => h.StudentId == studentId)
+                .OrderByDescending(h => h.CreatedAt)
+                .ToListAsync();
 
-            var response = history.Select(f => new
-            {
-                f.Id,
-                f.Date,
-                f.StudentNote,
-                f.GeneratedAdvice,
-                f.DetectedSentiment
-            });
-
-            return Ok(response);
+            return Ok(history);
         }
     }
 }

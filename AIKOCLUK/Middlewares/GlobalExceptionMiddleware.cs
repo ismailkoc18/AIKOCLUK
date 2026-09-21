@@ -7,11 +7,13 @@ namespace AIKOCLUK.Middlewares
     {
         private readonly RequestDelegate _next;
         private readonly ILogger<GlobalExceptionMiddleware> _logger;
+        private readonly IHostEnvironment _environment;
 
-        public GlobalExceptionMiddleware(RequestDelegate next, ILogger<GlobalExceptionMiddleware> logger)
+        public GlobalExceptionMiddleware(RequestDelegate next, ILogger<GlobalExceptionMiddleware> logger, IHostEnvironment environment)
         {
             _next = next;
             _logger = logger;
+            _environment = environment;
         }
 
         public async Task InvokeAsync(HttpContext context)
@@ -28,7 +30,7 @@ namespace AIKOCLUK.Middlewares
             }
         }
 
-        private static Task HandleExceptionAsync(HttpContext context, Exception exception)
+        private Task HandleExceptionAsync(HttpContext context, Exception exception)
         {
             context.Response.ContentType = "application/json";
             context.Response.StatusCode = (int)HttpStatusCode.InternalServerError;
@@ -37,7 +39,9 @@ namespace AIKOCLUK.Middlewares
             {
                 statusCode = context.Response.StatusCode,
                 message = "Sunucu tarafında beklenmeyen bir hata oluştu.",
-                detailedError = exception.Message // İsteğe bağlı: Canlı ortamda gizlenebilir
+                // Hata detayları sadece Development ortamında dönülür; production'da
+                // iç implementasyon/altyapı bilgisi dışarı sızmaz.
+                detailedError = _environment.IsDevelopment() ? exception.Message : null
             };
 
             var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
