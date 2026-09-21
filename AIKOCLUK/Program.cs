@@ -22,6 +22,9 @@ try
 
     var builder = WebApplication.CreateBuilder(args);
 
+    // Gemini Service Kaydý
+    builder.Services.AddHttpClient<IGeminiService, GeminiService>();
+
     // Serilog'u .NET Host seviyesine baðlýyoruz
     builder.Host.UseSerilog();
 
@@ -32,9 +35,13 @@ try
     builder.Services.AddFluentValidationAutoValidation();
     builder.Services.AddValidatorsFromAssemblyContaining<AIKOCLUK.Validators.ExamResultCreateDtoValidator>();
 
-    // Klasik Swagger Gen servisini ekliyoruz
+    // Klasik Swagger Gen servisini ekliyoruz (Çakýþma önleyici schema ID eklendi)
     builder.Services.AddEndpointsApiExplorer();
-    builder.Services.AddSwaggerGen();
+    builder.Services.AddSwaggerGen(c =>
+    {
+        // Ayný isimdeki DTO ve Model sýnýflarýnýn çakýþmasýný önlemek için tam namespace kullanýr
+        c.CustomSchemaIds(type => type.FullName);
+    });
 
     // Veritabaný Servis Kaydý (DbContext)
     builder.Services.AddDbContext<AppDbContext>();
@@ -50,22 +57,13 @@ try
         );
     }
 
-    // --- Endpoint Koruma API Key Kontrolü ---
-    var endpointApiKey = builder.Configuration["ApiSettings:ApiKey"];
-    if (string.IsNullOrEmpty(endpointApiKey))
-    {
-        throw new InvalidOperationException(
-            "ApiSettings:ApiKey bulunamadý! Lütfen 'User Secrets' (secrets.json) konfigürasyonunda tanýmlayýn."
-        );
-    }
-
     // AI Koç Servisi ve HttpClient Kaydý
     builder.Services.AddHttpClient<AIKOCLUK.Services.AiCoachService>();
 
     // Grafik ve Deneme Analiz Servisi Kaydý
     builder.Services.AddScoped<ExamAnalyticsService>();
 
-    // Konu Bazlý Analiz ve Müfredat Aðacý Servis Kaydý (YENÝ EKLENDÝ)
+    // Konu Bazlý Analiz ve Müfredat Aðacý Servis Kaydý
     builder.Services.AddScoped<TopicAnalyticsService>();
     builder.Services.AddScoped<GamificationService>();
 
@@ -101,7 +99,7 @@ try
 
     // --- 3. HTTP Pipeline Yapýlandýrmasý ---
 
-    // Global Hata Yakalama Middleware'i (Tüm hatalarý merkezi olarak yakalar ve loglar)
+    // Global Hata Yakalama Middleware'i
     app.UseMiddleware<GlobalExceptionMiddleware>();
 
     if (app.Environment.IsDevelopment())
